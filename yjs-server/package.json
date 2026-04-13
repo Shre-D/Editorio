@@ -1,0 +1,27 @@
+{
+    "name": "editorio-yjs-server",
+    "version": "1.0.0",
+    "description": "Editorio YJS WebSocket Server for CRDT Collaboration",
+    "main": "dist/index.js",
+    "type": "module",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "dev": "tsx watch src/index.ts"
+    },
+    "dependencies": {
+        "ioredis": "^5.3.2",
+        "lib0": "^0.2.87",
+        "pg": "^8.11.3",
+        "ws": "^8.16.0",
+        "y-protocols": "^1.0.6",
+        "yjs": "^13.6.10"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/pg": "^8.10.9",
+        "@types/ws": "^8.5.10",
+        "tsx": "^4.7.0",
+        "typescript": "^5.3.3"
+    }
+}

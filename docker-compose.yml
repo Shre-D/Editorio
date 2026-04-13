@@ -1,0 +1,187 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: editorio-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-editorio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-editorio_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-editorio}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-editorio}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - editorio-network
+
+  # Redis for Pub/Sub and Caching
+  redis:
+    image: redis:7-alpine
+    container_name: editorio-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - editorio-network
+
+  # RabbitMQ for Message Queues
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: editorio-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-editorio}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-editorio_secret}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "check_running" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - editorio-network
+
+  # Piston Code Execution Engine
+  piston:
+    image: ghcr.io/engineer-man/piston
+    container_name: editorio-piston
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - piston_packages:/piston/packages
+    tmpfs:
+      - /tmp:exec
+    ports:
+      - "2000:2000"
+    networks:
+      - editorio-network
+
+  # LiveKit Server for Audio/Video
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: editorio-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880" # HTTP/WebSocket
+      - "7881:7881" # RTC over TCP
+      - "7882:7882/udp" # RTC over UDP
+      - "50000-50050:50000-50050/udp" # RTC over TCP
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - editorio-network
+
+  # Backend API Server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: editorio-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-editorio}:${POSTGRES_PASSWORD:-editorio_secret}@postgres:5432/${POSTGRES_DB:-editorio}
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-editorio}:${RABBITMQ_PASSWORD:-editorio_secret}@rabbitmq:5672
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+      LIVEKIT_URL: ws://livekit:7880
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - editorio-network
+
+  # YJS WebSocket Server
+  yjs-server:
+    build:
+      context: ./yjs-server
+      dockerfile: Dockerfile
+    container_name: editorio-yjs
+    restart: unless-stopped
+    environment:
+      PORT: 1234
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://${POSTGRES_USER:-editorio}:${POSTGRES_PASSWORD:-editorio_secret}@postgres:5432/${POSTGRES_DB:-editorio}
+    ports:
+      - "1234:1234"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./yjs-server:/app
+      - /app/node_modules
+    networks:
+      - editorio-network
+
+  # Frontend (Vite Dev Server)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: editorio-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:3000
+      VITE_YJS_URL: ws://localhost:1234
+      VITE_LIVEKIT_URL: ws://localhost:7880
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+      - yjs-server
+      - livekit
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - editorio-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  piston_packages:
+
+
+networks:
+  editorio-network:
+    driver: bridge
